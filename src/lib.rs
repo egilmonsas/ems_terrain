@@ -1,13 +1,8 @@
-use bytemuck::{Pod, Zeroable};
-use meshopt::{simplify, simplify_sloppy, DecodePosition, SimplifyOptions, VertexDataAdapter};
-use reqwest::Client;
-use spade::{DelaunayTriangulation, Point2, Triangulation};
-use std::fs; // Reqwest client for HTTP requests
-use std::io::prelude::*;
-use std::mem;
+mod mesh;
+use crate::mesh::{triangulate_grid, Mesh, Vertex};
 
-// IO
-const OUTPUT_FILE_NAME: &str = "NVO_VBE022_Terrengmodell.ifc";
+use reqwest::Client;
+use std::io::prelude::*;
 
 // Metadata
 const NAME_AUTHOR: &str = "ems";
@@ -16,151 +11,34 @@ const VERSION_APPLICATION: &str = "0.1.0";
 const NAME_PROJECT: &str = "JM - Granitten";
 const NAME_SITE: &str = "Karihaugveien 22";
 
-const BBOX_X1: f32 = 109450.0;
-const BBOX_X2: f32 = 110450.0;
-const BBOX_Y1: f32 = 1157800.0;
-const BBOX_Y2: f32 = 1159800.0;
-const WIDTH: usize = 500;
-const HEIGHT: usize = 1000;
-const COORD_SYS: usize = 5110;
-
-// Structs
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
-struct Vertex {
-    position: [f32; 3],
+pub struct BBox {
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
 }
-
-impl DecodePosition for Vertex {
-    fn decode_position(&self) -> [f32; 3] {
-        self.position
+impl BBox {
+    pub fn width(&self) -> f32 {
+        self.x2 - self.x1
     }
-}
-
-#[derive(Default)]
-struct Mesh {
-    pub indices: Vec<u32>,
-    pub vertices: Vec<Vertex>,
-}
-impl std::fmt::Debug for Mesh {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Mesh {{ vertices: {}, indices: {} }}",
-            self.vertices.len(),
-            self.indices.len()
-        )
+    pub fn height(&self) -> f32 {
+        self.y2 - self.y1
+    }
+    pub fn num_pixels_x(&self, resolution: f32) -> usize {
+        (self.width() / resolution).ceil() as usize
+    }
+    pub fn num_pixels_y(&self, resolution: f32) -> usize {
+        (self.height() / resolution).ceil() as usize
     }
 }
 
-impl Mesh {
-    pub fn new(indices: Vec<u32>, vertices: Vec<Vertex>) -> Self {
-        Mesh { indices, vertices }
-    }
-    pub fn compact(&self) -> Mesh {
-        // 1. Generate remap table (only vertices referenced by indices survive)
-        let (new_vertex_count, remap) =
-            meshopt::generate_vertex_remap(&self.vertices, Some(&self.indices));
-
-        // 2. Remap index buffer
-        let new_indices =
-            meshopt::remap_index_buffer(Some(&self.indices), self.vertices.len(), &remap);
-
-        // 3. Remap vertex buffer
-        let new_vertices = meshopt::remap_vertex_buffer(&self.vertices, new_vertex_count, &remap);
-
-        Mesh {
-            vertices: new_vertices,
-            indices: new_indices,
-        }
-    }
-    pub fn simplify(&self, reduction_factor: f32) -> Mesh {
-        let vertex_bytes = bytemuck::cast_slice(&self.vertices);
-        let stride = mem::size_of::<Vertex>();
-        let position_offset = 0; // x,y,z start at byte 0
-
-        let adapter = VertexDataAdapter::new(vertex_bytes, stride, position_offset).unwrap();
-        let mut error = 0.0;
-        let options = SimplifyOptions::None;
-
-        let simplified_indices = simplify(
-            &self.indices,
-            &adapter,
-            (self.indices.len() as f32 * reduction_factor) as usize, // 50% reduction example
-            5.0,                                                     // terrain-friendly error
-            options,
-            Some(&mut error),
-        );
-
-        Mesh {
-            vertices: self.vertices.clone(),
-            indices: simplified_indices,
-        }
-    }
-    #[allow(dead_code)]
-    pub fn simplify_sloppy(&self, reduction_factor: f32) -> Mesh {
-        let vertex_bytes = bytemuck::cast_slice(&self.vertices);
-        let stride = mem::size_of::<Vertex>();
-        let position_offset = 0; // x,y,z start at byte 0
-
-        let adapter = VertexDataAdapter::new(vertex_bytes, stride, position_offset).unwrap();
-        let mut error = 0.0;
-
-        let simplified_indices = simplify_sloppy(
-            &self.indices,
-            &adapter,
-            (self.indices.len() as f32 * reduction_factor) as usize, // 50% reduction example
-            5.0,                                                     // terrain-friendly error
-            Some(&mut error),
-        );
-        Mesh {
-            vertices: self.vertices.clone(),
-            indices: simplified_indices,
-        }
-    }
-
-    pub fn write_index_list(&self) -> String {
-        let formatted_numbers: String = self
-            .indices
-            .chunks(3)
-            .map(|chunk| format!("({},{},{})", chunk[0] + 1, chunk[1] + 1, chunk[2] + 1))
-            .collect::<Vec<String>>()
-            .join(",");
-        format!(
-            "
-#53=IFCTRIANGULATEDFACESET(#94,$,$,({formatted_numbers}),$);"
-        )
-    }
-
-    pub fn write_vertex_list(&self) -> String {
-        let formatted_numbers: String = self
-            .vertices
-            .iter()
-            .map(|x| {
-                format!(
-                    "({:.2},{:.2},{:.2})",
-                    x.position[0], x.position[1], x.position[2]
-                )
-            })
-            .collect::<Vec<String>>()
-            .join(",");
-
-        format!(
-            "
-#94=IFCCARTESIANPOINTLIST3D(({formatted_numbers}));"
-        )
-    }
-}
-
-#[tokio::main]
-async fn main() {
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(OUTPUT_FILE_NAME)
-        .unwrap();
+// Main function to generate IFC terrain model
+pub async fn generate(
+    bbox: BBox,
+    resolution: f32,
+    coord_sys: usize,
+) -> Result<Vec<u8>, reqwest::Error> {
+    let mut file = Vec::new();
 
     write!(file, "
 
@@ -266,14 +144,9 @@ DATA;
 ").unwrap();
 
     let client = Client::new();
-
-    let padding = (((BBOX_X2 - BBOX_X1) / WIDTH as f32).powi(2)
-        + ((BBOX_Y2 - BBOX_Y1) / HEIGHT as f32).powi(2))
-    .sqrt()
-        * 2.0; // add one pixel padding
     let start = std::time::Instant::now();
     // retrieve extra data around the bounding box to avoid edge artifacts
-    let geotiff_data = wcs_api_call(padding, &client).await;
+    let geotiff_data = wcs_api_call(&bbox, resolution, &client, coord_sys).await;
     println!(
         "Downloaded GeoTIFF data size: {} bytes ({:.2}s)",
         geotiff_data.len(),
@@ -283,7 +156,7 @@ DATA;
     let start = std::time::Instant::now();
 
     // Parse GeoTIFF and extract points
-    let vertices = extract_points_from_geotiff(&geotiff_data);
+    let vertices = extract_points_from_geotiff(&bbox, &geotiff_data, resolution);
     println!(
         "Extracted {} points from GeoTIFF ({:.2}s)",
         vertices.len(),
@@ -292,7 +165,7 @@ DATA;
 
     let start = std::time::Instant::now();
     // Generate  triangulation
-    let faces = triangulate_grid(WIDTH, HEIGHT);
+    let faces = triangulate_grid(bbox.num_pixels_x(resolution), bbox.num_pixels_y(resolution));
     println!(
         "Generated {} faces from triangulation ({:.2}s)",
         faces.len(),
@@ -302,12 +175,6 @@ DATA;
     let start = std::time::Instant::now();
 
     let indices: Vec<u32> = faces.iter().flat_map(|f| vec![f[0], f[1], f[2]]).collect();
-    let vertices = vertices
-        .iter()
-        .map(|p| Vertex {
-            position: [p.x, p.y, p.z],
-        })
-        .collect();
 
     let mesh = Mesh::new(indices, vertices);
     let mesh_simplified = mesh.simplify(0.2); // Reduce to 20% of original faces
@@ -328,21 +195,13 @@ DATA;
     write!(file, "{}", point_list_str).unwrap();
     write!(file, "{}", vertex_list_str).unwrap();
     write!(file, "\nENDSEC;\nEND-ISO-10303-21;").unwrap();
-}
-#[allow(dead_code)]
-fn delaunay_triangulation(vertices: Vec<Point3>) -> Vec<[usize; 3]> {
-    let mut t: DelaunayTriangulation<Point2<f64>> = DelaunayTriangulation::new();
-    for v in &vertices {
-        t.insert(Point2::new(v.x as f64, v.y as f64)).unwrap();
-    }
-    let faces: Vec<[usize; 3]> = t
-        .inner_faces()
-        .map(|f| f.vertices().map(|v| v.index()))
-        .collect();
-    faces
+
+    Ok(file)
 }
 
-fn extract_points_from_geotiff(data: &[u8]) -> Vec<Point3> {
+// Other helper functions
+
+fn extract_points_from_geotiff(bbox: &BBox, data: &[u8], resolution: f32) -> Vec<Vertex> {
     use geo_types::Coord;
     use geotiff::GeoTiff;
     use std::io::Cursor;
@@ -351,16 +210,18 @@ fn extract_points_from_geotiff(data: &[u8]) -> Vec<Point3> {
 
     let cursor = Cursor::new(data);
     if let Ok(reader) = GeoTiff::read(cursor) {
-        for y in 0..HEIGHT {
-            for x in 0..WIDTH {
-                let coord_x = BBOX_X1 + (BBOX_X2 - BBOX_X1) * x as f32 / WIDTH as f32;
-                let coord_y = BBOX_Y1 + (BBOX_Y2 - BBOX_Y1) * y as f32 / HEIGHT as f32;
+        for y in 0..bbox.num_pixels_y(resolution) {
+            for x in 0..bbox.num_pixels_x(resolution) {
+                let coord_x =
+                    bbox.x1 + bbox.width() * x as f32 / bbox.num_pixels_x(resolution) as f32;
+                let coord_y =
+                    bbox.y1 + bbox.height() * y as f32 / bbox.num_pixels_y(resolution) as f32;
 
                 let coord = Coord {
                     x: coord_x as f64,
                     y: coord_y as f64,
                 };
-                vertices.push(Point3::new(
+                vertices.push(Vertex::new(
                     coord_x,
                     coord_y,
                     reader.get_value_at::<f32>(&coord, 0).unwrap(),
@@ -372,47 +233,15 @@ fn extract_points_from_geotiff(data: &[u8]) -> Vec<Point3> {
     vertices
 }
 
-fn triangulate_grid(width: usize, height: usize) -> Vec<[u32; 3]> {
-    let mut faces = Vec::with_capacity((width - 1) * (height - 1) * 2);
-
-    for y in 0..height - 1 {
-        for x in 0..width - 1 {
-            let v0 = (y * width + x) as u32;
-            let v1 = v0 + 1;
-            let v2 = v0 + width as u32;
-            let v3 = v2 + 1;
-
-            // triangle 1
-            faces.push([v0, v2, v1]);
-            // triangle 2
-            faces.push([v1, v2, v3]);
-        }
-    }
-
-    faces
-}
-
-fn construct_wcs_query(padding: f32) -> String {
-    format!(
+async fn wcs_api_call(bbox: &BBox, resolution: f32, client: &Client, coord_sys: usize) -> Vec<u8> {
+    let padding: f32 = resolution;
+    let num_pixels_x = bbox.num_pixels_x(resolution);
+    let num_pixels_y = bbox.num_pixels_y(resolution);
+    let url = format!(
         "http://wcs.geonorge.no/skwms1/wcs.hoyde-dtm_somlos?SERVICE=WCS&VERSION=1.0.0&REQUEST=GetCoverage&COVERAGE=las_dtm&CRS=EPSG:{}&BBOX={},{},{},{}&WIDTH={}&HEIGHT={}&FORMAT=GeoTIFF",
-        COORD_SYS,BBOX_X1-padding, BBOX_Y1-padding, BBOX_X2+padding, BBOX_Y2+padding,  WIDTH, HEIGHT
-    )
-}
-#[derive(Clone, Copy, Debug)]
-struct Point3 {
-    x: f32,
-    y: f32,
-    z: f32,
-}
-impl Point3 {
-    fn new(x: f32, y: f32, z: f32) -> Self {
-        Point3 { x, y, z }
-    }
-}
-
-async fn wcs_api_call(padding: f32, client: &Client) -> Vec<u8> {
-    let url = construct_wcs_query(padding);
-
+        coord_sys,bbox.x1-padding, bbox.y1-padding, bbox.x2+padding, bbox.y2+padding,  num_pixels_x, num_pixels_y
+    );
+    dbg!(&url);
     match client.get(&url).send().await {
         Ok(response) => response.bytes().await.unwrap_or_default().to_vec(),
         Err(_) => vec![],
