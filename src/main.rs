@@ -1,8 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use meshopt::{
-    pack_vertices, simplify, simplify_sloppy, typed_to_bytes, DecodePosition, FromVertex,
-    PackedVertex, PackedVertexOct, SimplifyOptions, VertexDataAdapter,
-};
+use meshopt::{simplify, simplify_sloppy, DecodePosition, SimplifyOptions, VertexDataAdapter};
 use reqwest::Client;
 use spade::{DelaunayTriangulation, Point2, Triangulation};
 use std::fs; // Reqwest client for HTTP requests
@@ -23,13 +20,13 @@ const BBOX_X1: f32 = 109450.0;
 const BBOX_X2: f32 = 110450.0;
 const BBOX_Y1: f32 = 1158800.0;
 const BBOX_Y2: f32 = 1159800.0;
-const WIDTH: usize = 150;
-const HEIGHT: usize = 150;
+const WIDTH: usize = 1000;
+const HEIGHT: usize = 1000;
 const COORD_SYS: usize = 5110;
 
 // Structs
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
 struct Vertex {
     position: [f32; 3],
 }
@@ -40,11 +37,6 @@ impl DecodePosition for Vertex {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-#[repr(C)]
-struct Triangle {
-    v: [Vertex; 3],
-}
 #[derive(Default)]
 struct Mesh {
     pub indices: Vec<u32>,
@@ -65,6 +57,23 @@ impl Mesh {
     pub fn new(indices: Vec<u32>, vertices: Vec<Vertex>) -> Self {
         Mesh { indices, vertices }
     }
+    pub fn compact(&self) -> Mesh {
+        // 1. Generate remap table (only vertices referenced by indices survive)
+        let (new_vertex_count, remap) =
+            meshopt::generate_vertex_remap(&self.vertices, Some(&self.indices));
+
+        // 2. Remap index buffer
+        let new_indices =
+            meshopt::remap_index_buffer(Some(&self.indices), self.vertices.len(), &remap);
+
+        // 3. Remap vertex buffer
+        let new_vertices = meshopt::remap_vertex_buffer(&self.vertices, new_vertex_count, &remap);
+
+        Mesh {
+            vertices: new_vertices,
+            indices: new_indices,
+        }
+    }
     pub fn simplify(&self, reduction_factor: f32) -> Mesh {
         let vertex_bytes = bytemuck::cast_slice(&self.vertices);
         let stride = mem::size_of::<Vertex>();
@@ -82,6 +91,7 @@ impl Mesh {
             options,
             Some(&mut error),
         );
+
         Mesh {
             vertices: self.vertices.clone(),
             indices: simplified_indices,
@@ -278,7 +288,7 @@ DATA;
 
     let start = std::time::Instant::now();
     // Generate  triangulation
-    let faces = delaunay_triangulation(vertices.clone());
+    let faces = triangulate_grid(WIDTH, HEIGHT);
     println!(
         "Generated {} faces from triangulation ({:.2}s)",
         faces.len(),
@@ -299,17 +309,20 @@ DATA;
         .collect();
 
     let mesh = Mesh::new(indices, vertices);
-    println!("Original mesh has {} faces", mesh.indices.len() / 3);
     let mesh_simplified = mesh.simplify(0.2); // Reduce to 20% of original faces
+    let mesh_compact = mesh_simplified.compact(); // Reduce to 20% of original faces
     println!(
-        "Simplified mesh to {} faces ({:.2}s)",
+        "Simplified mesh from {} to {} faces, and  from {} to {} vertices ({:.2}s)",
+        mesh.indices.len() / 3,
         mesh_simplified.indices.len() / 3,
+        mesh.vertices.len(),
+        mesh_compact.vertices.len(),
         start.elapsed().as_secs_f64()
     );
 
     // Write points and faces to IFC
-    let point_list_str = mesh_simplified.write_index_list();
-    let vertex_list_str = mesh_simplified.write_vertex_list();
+    let point_list_str = mesh_compact.write_index_list();
+    let vertex_list_str = mesh_compact.write_vertex_list();
 
     write!(file, "{}", point_list_str).unwrap();
     write!(file, "{}", vertex_list_str).unwrap();
