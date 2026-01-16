@@ -11,6 +11,28 @@ const VERSION_APPLICATION: &str = "0.1.0";
 const NAME_PROJECT: &str = "JM - Granitten";
 const NAME_SITE: &str = "Karihaugveien 22";
 
+pub struct PostProcessParams {
+    pub compression_factor: f32, // 0.0 - 1.0 (1.0 = no compression)
+    pub radius: f32,             // in metres
+    pub sigma: f32,              // strength of filter
+    pub passes: usize,           // number of passes
+}
+impl Default for PostProcessParams {
+    fn default() -> Self {
+        PostProcessParams {
+            compression_factor: 0.5,
+            radius: 1.0,
+            sigma: 0.5,
+            passes: 2,
+        }
+    }
+}
+impl PostProcessParams {
+    pub fn radius_in_px(&self, resolution: f32) -> usize {
+        (self.radius / resolution).ceil() as usize
+    }
+}
+
 pub struct BBox {
     pub x1: f32,
     pub y1: f32,
@@ -36,7 +58,7 @@ impl BBox {
 pub async fn generate(
     bbox: BBox,
     resolution: f32,
-    compression_factor: f32,
+    post_process_params: PostProcessParams,
     coord_sys: usize,
 ) -> Result<Vec<u8>, reqwest::Error> {
     let mut file = Vec::new();
@@ -157,10 +179,33 @@ DATA;
     let start = std::time::Instant::now();
 
     // Parse GeoTIFF and extract points
-    let vertices = extract_points_from_geotiff(&bbox, &geotiff_data, resolution);
+    let mut vertices = extract_points_from_geotiff(&bbox, &geotiff_data, resolution);
     println!(
         "Extracted {} points from GeoTIFF ({:.2}s)",
         vertices.len(),
+        start.elapsed().as_secs_f64()
+    );
+    // Gaussian blur smoothing pass
+    let start = std::time::Instant::now();
+
+    let radius = 2.0;
+    let radius_px = (radius / resolution) as usize;
+    let sigma = radius / 2.0;
+    let n_passes = 0;
+
+    gaussian_blur(
+        &mut vertices,
+        bbox.num_pixels_x(resolution),
+        bbox.num_pixels_y(resolution),
+        post_process_params.radius_in_px(resolution), // radius in pixels (~meters)
+        post_process_params.sigma,                    // sigma
+        post_process_params.passes,                   // number of passes
+    );
+    println!(
+        "Applied gaussian blur r={} s={} n={} ({:.2}s)",
+        radius,
+        sigma,
+        n_passes,
         start.elapsed().as_secs_f64()
     );
 
@@ -178,7 +223,7 @@ DATA;
     let indices: Vec<u32> = faces.iter().flat_map(|f| vec![f[0], f[1], f[2]]).collect();
 
     let mesh = Mesh::new(indices, vertices);
-    let mesh_simplified = mesh.simplify(compression_factor); // Reduce to x% of original faces
+    let mesh_simplified = mesh.simplify(post_process_params.compression_factor); // Reduce to x% of original faces
     let mesh_compact = mesh_simplified.compact();
     println!(
         "Simplified mesh from {} to {} faces, and  from {} to {} vertices ({:.2}s)",
@@ -247,4 +292,69 @@ async fn wcs_api_call(bbox: &BBox, resolution: f32, client: &Client, coord_sys: 
         Ok(response) => response.bytes().await.unwrap_or_default().to_vec(),
         Err(_) => vec![],
     }
+}
+
+// Filer
+pub fn gaussian_blur(
+    vertices: &mut [Vertex],
+    width: usize,
+    height: usize,
+    radius: usize,
+    sigma: f32,
+    passes: usize,
+) {
+    let kernel = gaussian_kernel(radius, sigma);
+    let size = 2 * radius + 1;
+
+    let mut z_buffer: Vec<f32> = vertices.iter().map(|v| v.position[2]).collect();
+
+    for _ in 0..passes {
+        let z_original = z_buffer.clone();
+
+        for y in radius..height - radius {
+            for x in radius..width - radius {
+                let mut sum = 0.0;
+
+                for ky in 0..size {
+                    for kx in 0..size {
+                        let ix = x + kx - radius;
+                        let iy = y + ky - radius;
+                        sum += kernel[ky][kx] * z_original[iy * width + ix];
+                    }
+                }
+
+                z_buffer[y * width + x] = sum;
+            }
+        }
+    }
+
+    // Write back
+    for (v, &z) in vertices.iter_mut().zip(z_buffer.iter()) {
+        v.position[2] = z;
+    }
+}
+
+fn gaussian_kernel(radius: usize, sigma: f32) -> Vec<Vec<f32>> {
+    let size = 2 * radius + 1;
+    let mut kernel = vec![vec![0.0; size]; size];
+    let mut sum = 0.0;
+
+    let r = radius as i32;
+
+    for y in -r..=r {
+        for x in -r..=r {
+            let value = (-((x * x + y * y) as f32) / (2.0 * sigma * sigma)).exp();
+            kernel[(y + r) as usize][(x + r) as usize] = value;
+            sum += value;
+        }
+    }
+
+    // Normalize
+    for row in kernel.iter_mut() {
+        for v in row.iter_mut() {
+            *v /= sum;
+        }
+    }
+
+    kernel
 }

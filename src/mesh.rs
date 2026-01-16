@@ -40,7 +40,7 @@ pub fn triangulate_grid(width: usize, height: usize) -> Vec<[u32; 3]> {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
 pub struct Vertex {
-    position: [f32; 3],
+    pub position: [f32; 3],
 }
 impl Vertex {
     pub fn new(x: f32, y: f32, z: f32) -> Self {
