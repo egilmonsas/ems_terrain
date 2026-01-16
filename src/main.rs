@@ -97,6 +97,7 @@ impl Mesh {
             indices: simplified_indices,
         }
     }
+    #[allow(dead_code)]
     pub fn simplify_sloppy(&self, reduction_factor: f32) -> Mesh {
         let vertex_bytes = bytemuck::cast_slice(&self.vertices);
         let stride = mem::size_of::<Vertex>();
@@ -297,14 +298,11 @@ DATA;
 
     let start = std::time::Instant::now();
 
-    let indices: Vec<u32> = faces
-        .iter()
-        .flat_map(|f| vec![f[0] as u32, f[1] as u32, f[2] as u32])
-        .collect();
+    let indices: Vec<u32> = faces.iter().flat_map(|f| vec![f[0], f[1], f[2]]).collect();
     let vertices = vertices
         .iter()
         .map(|p| Vertex {
-            position: [p.x as f32, p.y as f32, p.z as f32],
+            position: [p.x, p.y, p.z],
         })
         .collect();
 
@@ -328,11 +326,11 @@ DATA;
     write!(file, "{}", vertex_list_str).unwrap();
     write!(file, "\nENDSEC;\nEND-ISO-10303-21;").unwrap();
 }
-
+#[allow(dead_code)]
 fn delaunay_triangulation(vertices: Vec<Point3>) -> Vec<[usize; 3]> {
     let mut t: DelaunayTriangulation<Point2<f64>> = DelaunayTriangulation::new();
     for v in &vertices {
-        t.insert(Point2::new(v.x as f64, v.y as f64));
+        t.insert(Point2::new(v.x as f64, v.y as f64)).unwrap();
     }
     let faces: Vec<[usize; 3]> = t
         .inner_faces()
