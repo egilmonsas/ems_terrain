@@ -23,8 +23,8 @@ const BBOX_X1: f32 = 109450.0;
 const BBOX_X2: f32 = 110450.0;
 const BBOX_Y1: f32 = 1158800.0;
 const BBOX_Y2: f32 = 1159800.0;
-const WIDTH: usize = 750;
-const HEIGHT: usize = 750;
+const WIDTH: usize = 150;
+const HEIGHT: usize = 150;
 const COORD_SYS: usize = 5110;
 
 // Structs
@@ -277,16 +277,8 @@ DATA;
     );
 
     let start = std::time::Instant::now();
-    // Generate Delaunay triangulation
-    let mut t: DelaunayTriangulation<Point2<f64>> = DelaunayTriangulation::new();
-    for v in &vertices {
-        t.insert(Point2::new(v.x as f64, v.y as f64));
-    }
-    let faces: Vec<[usize; 3]> = t
-        .inner_faces()
-        .map(|f| f.vertices().map(|v| v.index()))
-        .collect();
-
+    // Generate  triangulation
+    let faces = delaunay_triangulation(vertices.clone());
     println!(
         "Generated {} faces from triangulation ({:.2}s)",
         faces.len(),
@@ -316,12 +308,24 @@ DATA;
     );
 
     // Write points and faces to IFC
-    let mesh_simplified = mesh.write_index_list();
-    let mesh_simplified = mesh.write_vertex_list();
+    let point_list_str = mesh_simplified.write_index_list();
+    let vertex_list_str = mesh_simplified.write_vertex_list();
 
     write!(file, "{}", point_list_str).unwrap();
     write!(file, "{}", vertex_list_str).unwrap();
     write!(file, "\nENDSEC;\nEND-ISO-10303-21;").unwrap();
+}
+
+fn delaunay_triangulation(vertices: Vec<Point3>) -> Vec<[usize; 3]> {
+    let mut t: DelaunayTriangulation<Point2<f64>> = DelaunayTriangulation::new();
+    for v in &vertices {
+        t.insert(Point2::new(v.x as f64, v.y as f64));
+    }
+    let faces: Vec<[usize; 3]> = t
+        .inner_faces()
+        .map(|f| f.vertices().map(|v| v.index()))
+        .collect();
+    faces
 }
 
 fn extract_points_from_geotiff(data: &[u8]) -> Vec<Point3> {
@@ -352,6 +356,26 @@ fn extract_points_from_geotiff(data: &[u8]) -> Vec<Point3> {
     }
 
     vertices
+}
+
+fn triangulate_grid(width: usize, height: usize) -> Vec<[u32; 3]> {
+    let mut faces = Vec::with_capacity((width - 1) * (height - 1) * 2);
+
+    for y in 0..height - 1 {
+        for x in 0..width - 1 {
+            let v0 = (y * width + x) as u32;
+            let v1 = v0 + 1;
+            let v2 = v0 + width as u32;
+            let v3 = v2 + 1;
+
+            // triangle 1
+            faces.push([v0, v2, v1]);
+            // triangle 2
+            faces.push([v1, v2, v3]);
+        }
+    }
+
+    faces
 }
 
 fn construct_wcs_query(padding: f32) -> String {
