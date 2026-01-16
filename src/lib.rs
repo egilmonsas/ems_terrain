@@ -36,6 +36,7 @@ impl BBox {
 pub async fn generate(
     bbox: BBox,
     resolution: f32,
+    compression_factor: f32,
     coord_sys: usize,
 ) -> Result<Vec<u8>, reqwest::Error> {
     let mut file = Vec::new();
@@ -177,8 +178,8 @@ DATA;
     let indices: Vec<u32> = faces.iter().flat_map(|f| vec![f[0], f[1], f[2]]).collect();
 
     let mesh = Mesh::new(indices, vertices);
-    let mesh_simplified = mesh.simplify(0.2); // Reduce to 20% of original faces
-    let mesh_compact = mesh_simplified.compact(); // Reduce to 20% of original faces
+    let mesh_simplified = mesh.simplify(compression_factor); // Reduce to x% of original faces
+    let mesh_compact = mesh_simplified.compact();
     println!(
         "Simplified mesh from {} to {} faces, and  from {} to {} vertices ({:.2}s)",
         mesh.indices.len() / 3,
