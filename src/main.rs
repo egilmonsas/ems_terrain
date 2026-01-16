@@ -18,9 +18,9 @@ const NAME_SITE: &str = "Karihaugveien 22";
 
 const BBOX_X1: f32 = 109450.0;
 const BBOX_X2: f32 = 110450.0;
-const BBOX_Y1: f32 = 1158800.0;
+const BBOX_Y1: f32 = 1157800.0;
 const BBOX_Y2: f32 = 1159800.0;
-const WIDTH: usize = 1000;
+const WIDTH: usize = 500;
 const HEIGHT: usize = 1000;
 const COORD_SYS: usize = 5110;
 
@@ -267,7 +267,10 @@ DATA;
 
     let client = Client::new();
 
-    let padding = 1.0f32;
+    let padding = (((BBOX_X2 - BBOX_X1) / WIDTH as f32).powi(2)
+        + ((BBOX_Y2 - BBOX_Y1) / HEIGHT as f32).powi(2))
+    .sqrt()
+        * 2.0; // add one pixel padding
     let start = std::time::Instant::now();
     // retrieve extra data around the bounding box to avoid edge artifacts
     let geotiff_data = wcs_api_call(padding, &client).await;
@@ -348,8 +351,8 @@ fn extract_points_from_geotiff(data: &[u8]) -> Vec<Point3> {
 
     let cursor = Cursor::new(data);
     if let Ok(reader) = GeoTiff::read(cursor) {
-        for y in 0..WIDTH {
-            for x in 0..HEIGHT {
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
                 let coord_x = BBOX_X1 + (BBOX_X2 - BBOX_X1) * x as f32 / WIDTH as f32;
                 let coord_y = BBOX_Y1 + (BBOX_Y2 - BBOX_Y1) * y as f32 / HEIGHT as f32;
 
