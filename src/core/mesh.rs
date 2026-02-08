@@ -1,9 +1,12 @@
-use bytemuck::{Pod, Zeroable};
+use geo_types::Coord;
+use geotiff::GeoTiff;
 use meshopt::DecodePosition;
-use meshopt::{simplify, simplify_sloppy, SimplifyOptions, VertexDataAdapter};
+use meshopt::{simplify, SimplifyOptions, VertexDataAdapter};
 use spade::{DelaunayTriangulation, Point2, Triangulation};
+use std::io::Cursor;
 use std::mem;
 
+use crate::prelude::{BBox, Vertex};
 #[allow(dead_code)]
 pub fn delaunay_triangulation(vertices: Vec<Vertex>) -> Vec<[usize; 3]> {
     let mut t: DelaunayTriangulation<Point2<f64>> = DelaunayTriangulation::new();
@@ -37,18 +40,7 @@ pub fn triangulate_grid(width: usize, height: usize) -> Vec<[u32; 3]> {
     faces
 }
 // Structs
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
-pub struct Vertex {
-    pub position: [f32; 3],
-}
-impl Vertex {
-    pub fn new(x: f32, y: f32, z: f32) -> Self {
-        Vertex {
-            position: [x, y, z],
-        }
-    }
-}
+
 impl DecodePosition for Vertex {
     fn decode_position(&self) -> [f32; 3] {
         self.position
@@ -115,57 +107,42 @@ impl Mesh {
             indices: simplified_indices,
         }
     }
-    #[allow(dead_code)]
-    pub fn simplify_sloppy(&self, reduction_factor: f32) -> Mesh {
-        let vertex_bytes = bytemuck::cast_slice(&self.vertices);
-        let stride = mem::size_of::<Vertex>();
-        let position_offset = 0; // x,y,z start at byte 0
+    pub fn from_geotiff(raw_data: &[u8], bbox: &BBox, resolution: f32) -> Self {
+        // 1. Decode GeoTIFF (using gdal or a custom decoder)
+        let width = bbox.num_pixels_x(resolution);
+        let height = bbox.num_pixels_y(resolution);
 
-        let adapter = VertexDataAdapter::new(vertex_bytes, stride, position_offset).unwrap();
-        let mut error = 0.0;
+        // 2. Create vertices
+        let mut vertices = Vec::with_capacity(width * height);
+        let cursor = Cursor::new(raw_data);
+        if let Ok(reader) = GeoTiff::read(cursor) {
+            for y in 0..height {
+                for x in 0..width {
+                    let coord_x =
+                        bbox.x1 + bbox.width() * x as f32 / bbox.num_pixels_x(resolution) as f32;
+                    let coord_y =
+                        bbox.y1 + bbox.height() * y as f32 / bbox.num_pixels_y(resolution) as f32;
+                    let coord = Coord {
+                        x: coord_x as f64,
+                        y: coord_y as f64,
+                    };
+                    let elevation = decode_elevation_from_geotiff(&reader, &coord);
 
-        let simplified_indices = simplify_sloppy(
-            &self.indices,
-            &adapter,
-            (self.indices.len() as f32 * reduction_factor) as usize, // 50% reduction example
-            5.0,                                                     // terrain-friendly error
-            Some(&mut error),
-        );
-        Mesh {
-            vertices: self.vertices.clone(),
-            indices: simplified_indices,
+                    vertices.push(Vertex::new(
+                        bbox.x1 + x as f32 * resolution,
+                        bbox.y1 + y as f32 * resolution,
+                        elevation,
+                    ));
+                }
+            }
         }
+        // 3. Create indices (triangulate the grid)
+        let faces = triangulate_grid(width, height);
+        let indices: Vec<u32> = faces.iter().flat_map(|f| vec![f[0], f[1], f[2]]).collect();
+        Mesh { vertices, indices }
     }
+}
 
-    pub fn write_index_list(&self) -> String {
-        let formatted_numbers: String = self
-            .indices
-            .chunks(3)
-            .map(|chunk| format!("({},{},{})", chunk[0] + 1, chunk[1] + 1, chunk[2] + 1))
-            .collect::<Vec<String>>()
-            .join(",");
-        format!(
-            "
-#53=IFCTRIANGULATEDFACESET(#94,$,$,({formatted_numbers}),$);"
-        )
-    }
-
-    pub fn write_vertex_list(&self) -> String {
-        let formatted_numbers: String = self
-            .vertices
-            .iter()
-            .map(|x| {
-                format!(
-                    "({:.2},{:.2},{:.2})",
-                    x.position[0], x.position[1], x.position[2]
-                )
-            })
-            .collect::<Vec<String>>()
-            .join(",");
-
-        format!(
-            "
-#94=IFCCARTESIANPOINTLIST3D(({formatted_numbers}));"
-        )
-    }
+fn decode_elevation_from_geotiff(reader: &GeoTiff, coord: &Coord) -> f32 {
+    reader.get_value_at::<f32>(coord, 0).unwrap()
 }
