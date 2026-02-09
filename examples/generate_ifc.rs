@@ -1,5 +1,4 @@
-use ems_terrain::providers::DataProvider;
-use ems_terrain::{prelude::*, processing, providers};
+use ems_terrain::prelude::*;
 use std::fs::File;
 use std::io::Write;
 
@@ -24,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// The main entry point for your Tauri backend
 pub async fn generate_ifc_terrain(req: GenerateRequest) -> Result<Vec<u8>, String> {
     // 1. Fetch
-    let terrain_provider = providers::geonorge::TerrainProvider::new(req.resolution, req.crs);
+    let terrain_provider = TerrainProvider::new(req.resolution, req.crs);
     let raw_data = terrain_provider
         .fetch(&req.bbox)
         .await
@@ -34,7 +33,7 @@ pub async fn generate_ifc_terrain(req: GenerateRequest) -> Result<Vec<u8>, Strin
     let mesh = Mesh::from_geotiff(&raw_data, &req.bbox, req.resolution);
 
     // 3. Process
-    let mesh = processing::surface::gaussian_blur_mesh(
+    let mesh = gaussian_blur_mesh(
         &mesh,
         req.bbox.num_pixels_x(req.resolution),
         req.bbox.num_pixels_y(req.resolution),

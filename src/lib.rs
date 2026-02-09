@@ -9,6 +9,8 @@ pub mod prelude {
     pub use crate::core::mesh::Mesh;
     pub use crate::core::vertex::Vertex;
     pub use crate::export::ifc::IfcWriter;
+    pub use crate::processing::surface::{gaussian_blur_mesh, PostProcessParams};
+    pub use crate::providers::{geonorge::TerrainProvider, DataProvider};
     pub use crate::GenerateRequest;
 }
 
