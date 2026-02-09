@@ -31,11 +31,11 @@ pub async fn generate_ifc_terrain(req: GenerateRequest) -> Result<Vec<u8>, Strin
         .map_err(|e| format!("Failed to fetch terrain: {}", e))?;
 
     // 2. Create Mesh
-    let mut mesh = Mesh::from_geotiff(&raw_data, &req.bbox, req.resolution);
+    let mesh = Mesh::from_geotiff(&raw_data, &req.bbox, req.resolution);
 
     // 3. Process
-    processing::surface::apply_gaussian_blur(
-        &mut mesh.vertices,
+    let mesh = processing::surface::gaussian_blur_mesh(
+        &mesh,
         req.bbox.num_pixels_x(req.resolution),
         req.bbox.num_pixels_y(req.resolution),
         req.resolution,

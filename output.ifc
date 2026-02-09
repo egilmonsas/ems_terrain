@@ -1,7 +1,7 @@
 ISO-10303-21;
 HEADER;
 FILE_DESCRIPTION(('Option [Terrengmodell: On]'),'2;1');
-FILE_NAME('','2026-02-08T23:17:23',(Default Author),(''),'DDS_IFC v3.0','Default Application build 1.0.0','DDS');
+FILE_NAME('','2026-02-09T19:17:23',(Default Author),(''),'DDS_IFC v3.0','Default Application build 1.0.0','DDS');
 FILE_SCHEMA(('IFC4'));
 ENDSEC;
 DATA;

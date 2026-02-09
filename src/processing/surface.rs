@@ -1,4 +1,4 @@
-use crate::prelude::Vertex;
+use crate::prelude::{Mesh, Vertex};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct PostProcessParams {
@@ -48,41 +48,64 @@ fn gaussian_kernel(radius: usize, sigma: f32) -> Vec<Vec<f32>> {
     kernel
 }
 
-// Filer
-pub fn apply_gaussian_blur(
-    vertices: &mut [Vertex],
+pub fn gaussian_blur_mesh(
+    mesh: &Mesh,
     width: usize,
     height: usize,
     resolution: f32,
     gauss_params: &PostProcessParams,
-) {
-    let kernel = gaussian_kernel(gauss_params.radius_in_px(resolution), gauss_params.sigma);
-    let radius_px = gauss_params.radius_in_px(resolution);
+) -> Mesh {
+    // TODO: implement separable kernel for better performance, but this is simpler to understand and good enough for now
+    let z_buffer: Vec<f32> = mesh.vertices.iter().map(|v| v.position[2]).collect();
+    let blurred = gaussian_blur_zbuffer(&z_buffer, width, height, resolution, gauss_params);
+    let new_vertices = mesh
+        .vertices
+        .iter()
+        .zip(blurred.iter())
+        .map(|(v, &z)| {
+            let mut v2 = *v;
+            v2.position[2] = z;
+            v2
+        })
+        .collect();
 
-    let mut z_buffer: Vec<f32> = vertices.iter().map(|v| v.position[2]).collect();
+    Mesh {
+        indices: mesh.indices.clone(),
+        vertices: new_vertices,
+    }
+}
+
+pub fn gaussian_blur_zbuffer(
+    z_buffer: &[f32],
+    width: usize,
+    height: usize,
+    resolution: f32,
+    gauss_params: &PostProcessParams,
+) -> Vec<f32> {
+    let radius_px = gauss_params.radius_in_px(resolution);
+    let kernel = gaussian_kernel(radius_px, gauss_params.sigma);
+
+    let mut out = z_buffer.to_vec();
 
     for _ in 0..gauss_params.passes {
-        let z_original = z_buffer.clone();
+        let original = out.clone();
 
         for y in radius_px..height - radius_px {
             for x in radius_px..width - radius_px {
                 let mut sum = 0.0;
 
                 for (ky, row) in kernel.iter().enumerate() {
-                    for (kx, &kernel_val) in row.iter().enumerate() {
-                        let ix = x + kx - gauss_params.radius_in_px(width as f32);
-                        let iy = y + ky - gauss_params.radius_in_px(width as f32);
-                        sum += kernel_val * z_original[iy * width + ix];
+                    for (kx, &kv) in row.iter().enumerate() {
+                        let ix = x + kx - radius_px;
+                        let iy = y + ky - radius_px;
+                        sum += kv * original[iy * width + ix];
                     }
                 }
 
-                z_buffer[y * width + x] = sum;
+                out[y * width + x] = sum;
             }
         }
     }
 
-    // Write back
-    for (v, &z) in vertices.iter_mut().zip(z_buffer.iter()) {
-        v.position[2] = z;
-    }
+    out
 }
