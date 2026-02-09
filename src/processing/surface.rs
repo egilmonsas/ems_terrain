@@ -1,4 +1,7 @@
-use crate::prelude::{Mesh, Vertex};
+use crate::{
+    prelude::{Mesh, Vertex},
+    processing::FilterParams,
+};
 
 fn gaussian_kernel(radius: usize, sigma: f32) -> Vec<Vec<f32>> {
     let size = 2 * radius + 1;
@@ -30,7 +33,7 @@ pub fn gaussian_blur_mesh(
     width: usize,
     height: usize,
     resolution: f32,
-    gauss_params: &PostProcessParams,
+    gauss_params: &FilterParams,
 ) -> Mesh {
     // TODO: implement separable kernel for better performance, but this is simpler to understand and good enough for now
     let z_buffer: Vec<f32> = mesh.vertices.iter().map(|v| v.position[2]).collect();
@@ -57,7 +60,7 @@ pub fn gaussian_blur_zbuffer(
     width: usize,
     height: usize,
     resolution: f32,
-    gauss_params: &PostProcessParams,
+    gauss_params: &FilterParams,
 ) -> Vec<f32> {
     let radius_px = gauss_params.radius_in_px(resolution);
     let kernel = gaussian_kernel(radius_px, gauss_params.sigma);
