@@ -1,28 +1,5 @@
 use crate::prelude::{Mesh, Vertex};
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct PostProcessParams {
-    pub compression_factor: f32, // 0.0 - 1.0 (1.0 = no compression)
-    pub radius: f32,             // in metres
-    pub sigma: f32,              // strength of filter
-    pub passes: usize,           // number of passes
-}
-impl Default for PostProcessParams {
-    fn default() -> Self {
-        PostProcessParams {
-            compression_factor: 0.5,
-            radius: 1.0,
-            sigma: 0.5,
-            passes: 2,
-        }
-    }
-}
-impl PostProcessParams {
-    pub fn radius_in_px(&self, resolution: f32) -> usize {
-        (self.radius / resolution).ceil() as usize
-    }
-}
-
 fn gaussian_kernel(radius: usize, sigma: f32) -> Vec<Vec<f32>> {
     let size = 2 * radius + 1;
     let mut kernel = vec![vec![0.0; size]; size];
