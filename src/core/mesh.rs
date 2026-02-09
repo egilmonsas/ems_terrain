@@ -47,7 +47,7 @@ impl DecodePosition for Vertex {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Mesh {
     pub indices: Vec<u32>,
     pub vertices: Vec<Vertex>,
