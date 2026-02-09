@@ -4,6 +4,7 @@ use std::io::Write;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    todo!();
     println!("🚀 Starting IFC Generation Pipeline...");
 
     // 1. Setup the request (Simulating UI input from Tauri)
